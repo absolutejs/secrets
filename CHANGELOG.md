@@ -1,5 +1,33 @@
 # @absolutejs/secrets changelog
 
+## 0.1.0 — 2026-05-29
+
+Substrate-deepening pass. Backwards-compatible — new surface is additive.
+
+### Added
+
+- **`broker.redactStream()`** — returns a `TransformStream<string, string>`.
+  Streaming variant of `redact()` that catches secrets even when they
+  straddle a chunk boundary. The transform keeps a lookback buffer the size
+  of the longest cached secret, redacts the WHOLE buffer per chunk (so
+  in-flight secrets become labels), then holds back the tail until the next
+  chunk arrives. Drop-in for any log forwarder so plaintext secrets never
+  reach the sink — `tenantStdout.pipe(broker.redactStream()).pipe(loki)`.
+- **`broker.onRotate(name, listener)`** — subscribe to rotation events for
+  a specific name. Listener fires AFTER the new value lands in the cache,
+  with `{ name, value, fingerprint, at }`. Returns an unsubscribe handle.
+  Use this for long-lived connections (DB clients, AI SDKs, WebSocket
+  servers) that need to swap credentials in-place. Multiple listeners on
+  the same name all fire; a throwing listener doesn't crash `rotate`.
+- **`cacheTtlOverrides: Record<string, number>`** — per-name TTL override.
+  High-blast-radius secrets (admin tokens, signing keys) can refresh more
+  often than the global default; rarely-changing ones can refresh less.
+- **`redactionEncodings: ('plain' | 'base64')[]`** — by default `redact`
+  looks for the raw value. Add `'base64'` and the broker also looks for
+  the base64-encoded form of every cached secret — useful when secrets
+  end up inside JWTs, cookies, or any payload that base64-wraps a
+  credential. Labels distinguish: `[REDACTED:NAME]` vs `[REDACTED:NAME:b64]`.
+
 ## 0.0.1 — 2026-05-29
 
 Initial release.

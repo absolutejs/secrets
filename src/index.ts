@@ -57,6 +57,8 @@ export type AuditEvent =
 
 export type AuditHook = (event: AuditEvent) => void | Promise<void>;
 
+export type RedactionEncoding = 'plain' | 'base64';
+
 export type SecretBrokerOptions = {
 	/** The adapter the broker delegates fetch / rotate / put to. */
 	adapter: SecretAdapter;
@@ -69,15 +71,37 @@ export type SecretBrokerOptions = {
 	 */
 	cacheTtlMs?: number;
 	/**
+	 * Per-name TTL overrides. The override wins over `cacheTtlMs`. Use
+	 * a short TTL for high-blast-radius secrets (admin tokens, signing
+	 * keys) so a compromised value's lifetime is bounded by the override,
+	 * not the global default.
+	 */
+	cacheTtlOverrides?: Record<string, number>;
+	/**
 	 * Minimum length a cached value must have before `redact` will rewrite
 	 * occurrences of it in arbitrary text. Default 8 — short values risk
 	 * blanking out coincidental matches (e.g. a short password "abc1"
 	 * appearing as a substring of unrelated text).
 	 */
 	redactionMinLength?: number;
+	/**
+	 * Encodings to redact alongside the plaintext value. Default `['plain']`.
+	 * Add `'base64'` to also catch base64-encoded forms — useful when
+	 * secrets end up inside JWTs, cookies, or any payload that base64-wraps
+	 * a credential.
+	 */
+	redactionEncodings?: RedactionEncoding[];
 	/** Override `Date.now` for tests. */
 	clock?: () => number;
 };
+
+/** Listener registered via {@link SecretBroker.onRotate}. */
+export type RotationListener = (event: {
+	name: string;
+	value: string;
+	fingerprint: string;
+	at: number;
+}) => void | Promise<void>;
 
 export type SecretBroker = {
 	/**
@@ -98,11 +122,30 @@ export type SecretBroker = {
 	 */
 	redact: (text: string) => string;
 	/**
+	 * Streaming variant of {@link redact}. Returns a `TransformStream`
+	 * that catches secrets even when they're split across chunks (a chunk
+	 * boundary in the middle of `sk_live_abc...` would otherwise miss). The
+	 * stream keeps a lookback buffer the size of the longest cached secret;
+	 * once the buffer outgrows that, the safe-region prefix is emitted.
+	 *
+	 * Use this on `process.stdout` / `process.stderr` / a tenant log forwarder
+	 * so plaintext secrets never reach the sink.
+	 */
+	redactStream: () => TransformStream<string, string>;
+	/**
 	 * Rotate a secret. Calls `adapter.rotate(name)`, invalidates the cache,
 	 * returns the new `{ value, fingerprint }`. Throws if the adapter does
-	 * not support rotation.
+	 * not support rotation. Fires every `onRotate` listener registered for
+	 * this name.
 	 */
 	rotate: (name: string) => Promise<SecretValue>;
+	/**
+	 * Subscribe to rotation events for a specific name. Listener fires
+	 * AFTER the new value is in the cache. Returns an unsubscribe handle.
+	 * Use this for long-lived connections (DB clients, AI provider SDKs)
+	 * that need to swap credentials in-place when rotation lands.
+	 */
+	onRotate: (name: string, listener: RotationListener) => () => void;
 	/**
 	 * Invalidate one cache entry, or the whole cache when `name` is omitted.
 	 */
@@ -327,11 +370,33 @@ type CacheEntry = {
 
 export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker => {
 	const clock = options.clock ?? Date.now;
-	const ttl = options.cacheTtlMs ?? 60_000;
+	const defaultTtl = options.cacheTtlMs ?? 60_000;
+	const ttlOverrides = options.cacheTtlOverrides ?? {};
 	const minLen = options.redactionMinLength ?? 8;
+	const encodings = options.redactionEncodings ?? ['plain'];
 	const audit = options.audit;
 	const cache = new Map<string, CacheEntry>();
+	const rotationListeners = new Map<string, Set<RotationListener>>();
 	let disposed = false;
+
+	const ttlFor = (name: string): number => ttlOverrides[name] ?? defaultTtl;
+
+	const fireRotation = (name: string, value: string, fingerprint: string, at: number) => {
+		const set = rotationListeners.get(name);
+		if (!set || set.size === 0) return;
+		for (const listener of set) {
+			try {
+				const ret = listener({ at, fingerprint, name, value });
+				if (ret && typeof (ret as Promise<void>).then === 'function') {
+					(ret as Promise<void>).catch((error) => {
+						console.error('[secrets] rotation listener rejected:', error);
+					});
+				}
+			} catch (error) {
+				console.error('[secrets] rotation listener threw:', error);
+			}
+		}
+	};
 
 	const fireAudit = (event: AuditEvent) => {
 		if (!audit) return;
@@ -361,7 +426,7 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 		if (disposed) return null;
 		const now = clock();
 		const cached = cache.get(name);
-		if (cached && now - cached.storedAt < ttl) {
+		if (cached && now - cached.storedAt < ttlFor(name)) {
 			fireAudit({ at: now, event: 'resolve.hit', fingerprint: cached.fingerprint, name });
 			return { fingerprint: cached.fingerprint, value: cached.value };
 		}
@@ -395,6 +460,7 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 		const now = clock();
 		const entry = cacheEntry(name, next, now);
 		fireAudit({ at: now, event: 'rotate', fingerprint: entry.fingerprint, name });
+		fireRotation(name, entry.value, entry.fingerprint, now);
 		return { fingerprint: entry.fingerprint, value: entry.value };
 	};
 
@@ -407,29 +473,104 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 		fireAudit({ at: clock(), event: 'invalidate', name: name ?? null });
 	};
 
+	// Returns every (representation, replacementLabel) pair currently in
+	// the cache that's worth searching for. Longest-first so a longer
+	// secret blanks BEFORE one of its substrings would.
+	const redactionPairs = (): Array<[string, string]> => {
+		const pairs: Array<[string, string]> = [];
+		for (const [name, entry] of cache) {
+			if (entry.value.length < minLen) continue;
+			for (const enc of encodings) {
+				if (enc === 'plain') {
+					pairs.push([entry.value, `[REDACTED:${name}]`]);
+				} else if (enc === 'base64') {
+					try {
+						const encoded = btoa(entry.value);
+						// Skip if encoding produces a too-short token to be safe.
+						if (encoded.length >= minLen) {
+							pairs.push([encoded, `[REDACTED:${name}:b64]`]);
+						}
+					} catch {
+						// btoa rejects non-Latin-1; skip silently.
+					}
+				}
+			}
+		}
+		pairs.sort((a, b) => b[0].length - a[0].length);
+		return pairs;
+	};
+
 	const redact: SecretBroker['redact'] = (text) => {
 		if (text.length === 0 || cache.size === 0) return text;
-		// Replace longest values first so a substring of a longer secret
-		// isn't blanked before its full match is found.
-		const ordered = Array.from(cache.entries())
-			.filter(([, entry]) => entry.value.length >= minLen)
-			.sort(([, a], [, b]) => b.value.length - a.value.length);
 		let out = text;
-		for (const [name, entry] of ordered) {
-			if (!out.includes(entry.value)) continue;
-			out = out.split(entry.value).join(`[REDACTED:${name}]`);
+		for (const [needle, replacement] of redactionPairs()) {
+			if (!out.includes(needle)) continue;
+			out = out.split(needle).join(replacement);
 		}
 		return out;
+	};
+
+	const redactStream: SecretBroker['redactStream'] = () => {
+		// Per-chunk algorithm:
+		//   1. Append chunk to buffer.
+		//   2. Redact the WHOLE buffer (complete secrets → labels).
+		//   3. Hold back the last `lookback` chars — they might contain a
+		//      partial secret that completes on the next chunk. The next
+		//      chunk's redact() will catch it once the full secret arrives.
+		//   4. Emit the safe prefix.
+		// Without step 2 happening BEFORE the split, a secret straddling the
+		// boundary would have its prefix emitted un-redacted before the suffix
+		// even shows up.
+		let buffer = '';
+		const maxLen = () =>
+			redactionPairs().reduce((max, [needle]) => Math.max(max, needle.length), 0);
+		return new TransformStream<string, string>({
+			transform: (chunk, controller) => {
+				buffer += chunk;
+				const lookback = maxLen();
+				const reduced = redact(buffer);
+				if (reduced.length <= lookback) {
+					buffer = reduced;
+					return;
+				}
+				const safe = reduced.slice(0, reduced.length - lookback);
+				buffer = reduced.slice(reduced.length - lookback);
+				if (safe.length > 0) controller.enqueue(safe);
+			},
+			flush: (controller) => {
+				if (buffer.length === 0) return;
+				controller.enqueue(redact(buffer));
+				buffer = '';
+			},
+		});
+	};
+
+	const onRotate: SecretBroker['onRotate'] = (name, listener) => {
+		let set = rotationListeners.get(name);
+		if (!set) {
+			set = new Set();
+			rotationListeners.set(name, set);
+		}
+		set.add(listener);
+		return () => {
+			const current = rotationListeners.get(name);
+			if (!current) return;
+			current.delete(listener);
+			if (current.size === 0) rotationListeners.delete(name);
+		};
 	};
 
 	return {
 		dispose: () => {
 			disposed = true;
 			cache.clear();
+			rotationListeners.clear();
 		},
 		fingerprint: fingerprintOf,
 		invalidate,
+		onRotate,
 		redact,
+		redactStream,
 		resolve,
 		rotate,
 	};
