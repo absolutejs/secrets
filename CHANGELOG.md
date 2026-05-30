@@ -1,5 +1,34 @@
 # @absolutejs/secrets changelog
 
+## 0.3.0 — 2026-05-30
+
+### Added — OpenTelemetry tracing via @absolutejs/telemetry
+
+Closes G2 (deep-research audit) for the secret broker.
+
+- **`SecretBrokerOptions.tracerProvider?: TracerProvider`** — any
+  `@opentelemetry/api`-compatible `TracerProvider`. Structural type
+  via `@absolutejs/telemetry`; no peer-dep on `@opentelemetry/api`.
+- **`secrets.resolve` span** wraps every `resolve()` call with
+  `abs.secret.name` attribute. On cache hit and on adapter
+  fulfillment, `abs.secret.fingerprint` is set (sha256-derived;
+  safe-for-log). `secrets.cache = "hit" | "miss"` distinguishes the
+  paths. `secrets.found = false` when the adapter returned null.
+- **`secrets.rotate` span** wraps every `rotate()` call with the same
+  attributes (new fingerprint after the rotation succeeds).
+- **`redact()` is NOT traced** — it's called per log line, which
+  would explode span volume. Use the existing audit hook for
+  per-redaction signals if you need them.
+- Status mapping: ERROR + `recordException` on adapter throw; OK
+  otherwise (including null-not-found resolves).
+- `@absolutejs/telemetry` added as a regular dep.
+- Zero-cost when `tracerProvider` is omitted.
+
+5 new tests in `tests/tracing.test.ts`: cache hit / miss / not-found
+/ adapter error / rotate. Plus noop fallback.
+
+Test count: 48 → 53.
+
 ## 0.2.0 — 2026-05-29
 
 Substrate-pattern uniformity. Backwards-compatible — new surface is additive.

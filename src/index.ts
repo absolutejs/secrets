@@ -24,6 +24,12 @@
  * The broker is bun/elysia-agnostic — same posture as router + meter.
  */
 
+import {
+	ABS_ATTRS,
+	tracerOrNoop,
+	type TracerProvider
+} from '@absolutejs/telemetry';
+
 export type SecretValue = {
 	/** The plaintext secret. Treat as poison: never log, never serialize. */
 	value: string;
@@ -93,6 +99,16 @@ export type SecretBrokerOptions = {
 	redactionEncodings?: RedactionEncoding[];
 	/** Override `Date.now` for tests. */
 	clock?: () => number;
+	/**
+	 * Optional OpenTelemetry tracer provider. When set, `broker.resolve`
+	 * and `broker.rotate` are wrapped in `secrets.resolve` /
+	 * `secrets.rotate` spans with `abs.secret.name` +
+	 * `abs.secret.fingerprint` attributes. `broker.redact` is NOT
+	 * traced — it's called per log line, which would explode span
+	 * volume. When omitted, all tracing is a zero-allocation noop.
+	 * Added in 0.3.0.
+	 */
+	tracerProvider?: TracerProvider;
 };
 
 /** Listener registered via {@link SecretBroker.onRotate}. */
@@ -443,6 +459,8 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 	const rotationListeners = new Map<string, Set<RotationListener>>();
 	let disposed = false;
 	let draining = false;
+	// 0.3.0: OTel tracer (noop when options.tracerProvider unset).
+	const tracer = tracerOrNoop(options.tracerProvider, '@absolutejs/secrets');
 	// 0.2.0: cumulative operator counters. Survive `drain()` and
 	// `dispose()` so the operator can read final state post-shutdown.
 	const counters: SecretBrokerMetrics = {
@@ -504,24 +522,38 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 	const resolve: SecretBroker['resolve'] = async (name) => {
 		if (disposed) return null;
 		if (draining) throw new BrokerDrainedError();
+		// 0.3.0: span the resolve. Attribute carries the secret NAME
+		// (safe) and on cache hit also the FINGERPRINT (also safe —
+		// it's sha256-derived, never the value).
+		const span = tracer.startSpan('secrets.resolve', {
+			attributes: { [ABS_ATTRS.secretName]: name }
+		});
 		counters.resolves += 1;
 		const now = clock();
-		const cached = cache.get(name);
-		if (cached && now - cached.storedAt < ttlFor(name)) {
-			counters.resolveHits += 1;
-			fireAudit({ at: now, event: 'resolve.hit', fingerprint: cached.fingerprint, name });
-			return { fingerprint: cached.fingerprint, value: cached.value };
-		}
-		counters.resolveMisses += 1;
 		try {
+			const cached = cache.get(name);
+			if (cached && now - cached.storedAt < ttlFor(name)) {
+				counters.resolveHits += 1;
+				span.setAttribute(ABS_ATTRS.secretFingerprint, cached.fingerprint);
+				span.setAttribute('secrets.cache', 'hit');
+				fireAudit({ at: now, event: 'resolve.hit', fingerprint: cached.fingerprint, name });
+				span.setStatus({ code: 1 /* OK */ });
+				return { fingerprint: cached.fingerprint, value: cached.value };
+			}
+			counters.resolveMisses += 1;
+			span.setAttribute('secrets.cache', 'miss');
 			const value = await options.adapter.fetch(name);
 			if (value === null) {
 				fireAudit({ at: now, event: 'resolve.miss', name });
 				cache.delete(name);
+				span.setAttribute('secrets.found', false);
+				span.setStatus({ code: 1 /* OK */ });
 				return null;
 			}
 			const entry = cacheEntry(name, value, now);
+			span.setAttribute(ABS_ATTRS.secretFingerprint, entry.fingerprint);
 			fireAudit({ at: now, event: 'resolve.miss', fingerprint: entry.fingerprint, name });
+			span.setStatus({ code: 1 /* OK */ });
 			return { fingerprint: entry.fingerprint, value: entry.value };
 		} catch (error) {
 			counters.resolveErrors += 1;
@@ -531,7 +563,14 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 				event: 'resolve.error',
 				name,
 			});
+			span.recordException(error);
+			span.setStatus({
+				code: 2 /* ERROR */,
+				message: error instanceof Error ? error.message : String(error)
+			});
 			throw error;
+		} finally {
+			span.end();
 		}
 	};
 
@@ -541,17 +580,32 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 		if (!options.adapter.rotate) {
 			throw new Error('Adapter does not support rotate()');
 		}
+		// 0.3.0: span the rotation. The pre-rotation fingerprint isn't
+		// known until after the cache lookup is done; attach the new
+		// fingerprint on success.
+		const span = tracer.startSpan('secrets.rotate', {
+			attributes: { [ABS_ATTRS.secretName]: name }
+		});
 		try {
 			const next = await options.adapter.rotate(name);
 			const now = clock();
 			const entry = cacheEntry(name, next, now);
 			counters.rotates += 1;
+			span.setAttribute(ABS_ATTRS.secretFingerprint, entry.fingerprint);
+			span.setStatus({ code: 1 /* OK */ });
 			fireAudit({ at: now, event: 'rotate', fingerprint: entry.fingerprint, name });
 			fireRotation(name, entry.value, entry.fingerprint, now);
 			return { fingerprint: entry.fingerprint, value: entry.value };
 		} catch (error) {
 			counters.rotateErrors += 1;
+			span.recordException(error);
+			span.setStatus({
+				code: 2 /* ERROR */,
+				message: error instanceof Error ? error.message : String(error)
+			});
 			throw error;
+		} finally {
+			span.end();
 		}
 	};
 
