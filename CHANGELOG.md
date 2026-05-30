@@ -1,5 +1,28 @@
 # @absolutejs/secrets changelog
 
+## 0.2.0 — 2026-05-29
+
+Substrate-pattern uniformity. Backwards-compatible — new surface is additive.
+
+### Added
+
+- **`broker.metrics()`** returns `SecretBrokerMetrics` — cumulative
+  counters since `createSecretBroker()`: `resolves`, `resolveHits`,
+  `resolveMisses`, `resolveErrors`, `rotates`, `rotateErrors`,
+  `invalidations`, `redactCalls`, `redactionsApplied`,
+  `redactionsBase64`. Survives `drain()` and `dispose()` so the
+  operator can read final state post-shutdown.
+
+- **`broker.drain()`** flips the broker into draining state — new
+  `resolve()` / `rotate()` calls reject with `BrokerDrainedError`
+  (new export). In-flight adapter calls keep running to completion.
+  Symmetric with `runtime.drain()` / `queue.drain()` /
+  `HibernatingIsolatePool.drain()`. Use this during graceful
+  shutdown so a tenant whose process is about to stop doesn't issue
+  a fresh fetch against the secret store mid-teardown.
+
+11 new tests in `tests/metrics.test.ts`. Test count: 37 → 48.
+
 ## 0.1.0 — 2026-05-29
 
 Substrate-deepening pass. Backwards-compatible — new surface is additive.

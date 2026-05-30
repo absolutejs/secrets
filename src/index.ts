@@ -152,7 +152,71 @@ export type SecretBroker = {
 	invalidate: (name?: string) => void;
 	/** Tear down the broker — clears the cache; further resolves still hit the adapter. */
 	dispose: () => void;
+	/**
+	 * Operator-shaped cumulative counters since `createSecretBroker()`.
+	 * Scrape on a 30s interval for tier monitoring + rotation cadence.
+	 * Added in 0.2.0.
+	 */
+	metrics: () => SecretBrokerMetrics;
+	/**
+	 * Refuse new `resolve()` / `rotate()` calls (they reject with
+	 * `BrokerDrainedError`); in-flight adapter calls keep running. Use
+	 * during graceful shutdown so a tenant whose process is about to
+	 * stop doesn't issue a fresh fetch against the secret store mid-
+	 * teardown. Symmetric with `runtime.drain()` / `queue.drain()`.
+	 * Added in 0.2.0.
+	 */
+	drain: () => void;
 };
+
+/**
+ * Returned by {@link SecretBroker.metrics}. All counters cumulative
+ * since `createSecretBroker()`; cleared by neither `dispose()` nor
+ * `drain()` (so the operator can see what happened pre-shutdown).
+ * Added in 0.2.0.
+ */
+export type SecretBrokerMetrics = {
+	/** `resolve()` calls — including cached hits, misses, and errors. */
+	resolves: number;
+	/** `resolve()` calls served from cache (no adapter hit). */
+	resolveHits: number;
+	/** `resolve()` calls that hit the adapter (cache miss OR expired). */
+	resolveMisses: number;
+	/** `resolve()` calls where the adapter threw. */
+	resolveErrors: number;
+	/** Successful `rotate()` calls. */
+	rotates: number;
+	/** `rotate()` calls where the adapter threw. */
+	rotateErrors: number;
+	/** `invalidate()` calls (per call, regardless of cache size). */
+	invalidations: number;
+	/** `redact()` calls (whether anything was rewritten or not). */
+	redactCalls: number;
+	/**
+	 * Distinct (secret, encoding) pairs that triggered a replacement —
+	 * NOT total occurrences. A `redact()` call that rewrites the same
+	 * key three times in one string bumps this by 1. Useful for
+	 * "is anything ever actually getting redacted, or are we configured
+	 * for nothing."
+	 */
+	redactionsApplied: number;
+	/** Subset of `redactionsApplied` for base64 encoding. */
+	redactionsBase64: number;
+};
+
+/**
+ * Thrown by `resolve()` / `rotate()` after `drain()` has been called.
+ * Added in 0.2.0.
+ */
+export class BrokerDrainedError extends Error {
+	constructor() {
+		super(
+			'[secrets] Broker is draining — resolve/rotate refused. ' +
+				'Use the broker before the shutdown handler fires.'
+		);
+		this.name = 'BrokerDrainedError';
+	}
+}
 
 // -----------------------------------------------------------------------------
 // Fingerprint
@@ -378,6 +442,21 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 	const cache = new Map<string, CacheEntry>();
 	const rotationListeners = new Map<string, Set<RotationListener>>();
 	let disposed = false;
+	let draining = false;
+	// 0.2.0: cumulative operator counters. Survive `drain()` and
+	// `dispose()` so the operator can read final state post-shutdown.
+	const counters: SecretBrokerMetrics = {
+		invalidations: 0,
+		redactCalls: 0,
+		redactionsApplied: 0,
+		redactionsBase64: 0,
+		resolveErrors: 0,
+		resolveHits: 0,
+		resolveMisses: 0,
+		resolves: 0,
+		rotateErrors: 0,
+		rotates: 0
+	};
 
 	const ttlFor = (name: string): number => ttlOverrides[name] ?? defaultTtl;
 
@@ -424,12 +503,16 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 
 	const resolve: SecretBroker['resolve'] = async (name) => {
 		if (disposed) return null;
+		if (draining) throw new BrokerDrainedError();
+		counters.resolves += 1;
 		const now = clock();
 		const cached = cache.get(name);
 		if (cached && now - cached.storedAt < ttlFor(name)) {
+			counters.resolveHits += 1;
 			fireAudit({ at: now, event: 'resolve.hit', fingerprint: cached.fingerprint, name });
 			return { fingerprint: cached.fingerprint, value: cached.value };
 		}
+		counters.resolveMisses += 1;
 		try {
 			const value = await options.adapter.fetch(name);
 			if (value === null) {
@@ -441,6 +524,7 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 			fireAudit({ at: now, event: 'resolve.miss', fingerprint: entry.fingerprint, name });
 			return { fingerprint: entry.fingerprint, value: entry.value };
 		} catch (error) {
+			counters.resolveErrors += 1;
 			fireAudit({
 				at: now,
 				error: error instanceof Error ? error.message : String(error),
@@ -453,15 +537,22 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 
 	const rotate: SecretBroker['rotate'] = async (name) => {
 		if (disposed) throw new Error('Broker is disposed');
+		if (draining) throw new BrokerDrainedError();
 		if (!options.adapter.rotate) {
 			throw new Error('Adapter does not support rotate()');
 		}
-		const next = await options.adapter.rotate(name);
-		const now = clock();
-		const entry = cacheEntry(name, next, now);
-		fireAudit({ at: now, event: 'rotate', fingerprint: entry.fingerprint, name });
-		fireRotation(name, entry.value, entry.fingerprint, now);
-		return { fingerprint: entry.fingerprint, value: entry.value };
+		try {
+			const next = await options.adapter.rotate(name);
+			const now = clock();
+			const entry = cacheEntry(name, next, now);
+			counters.rotates += 1;
+			fireAudit({ at: now, event: 'rotate', fingerprint: entry.fingerprint, name });
+			fireRotation(name, entry.value, entry.fingerprint, now);
+			return { fingerprint: entry.fingerprint, value: entry.value };
+		} catch (error) {
+			counters.rotateErrors += 1;
+			throw error;
+		}
 	};
 
 	const invalidate: SecretBroker['invalidate'] = (name) => {
@@ -470,6 +561,7 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 		} else {
 			cache.delete(name);
 		}
+		counters.invalidations += 1;
 		fireAudit({ at: clock(), event: 'invalidate', name: name ?? null });
 	};
 
@@ -501,11 +593,14 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 	};
 
 	const redact: SecretBroker['redact'] = (text) => {
+		counters.redactCalls += 1;
 		if (text.length === 0 || cache.size === 0) return text;
 		let out = text;
 		for (const [needle, replacement] of redactionPairs()) {
 			if (!out.includes(needle)) continue;
 			out = out.split(needle).join(replacement);
+			counters.redactionsApplied += 1;
+			if (replacement.endsWith(':b64]')) counters.redactionsBase64 += 1;
 		}
 		return out;
 	};
@@ -566,8 +661,12 @@ export const createSecretBroker = (options: SecretBrokerOptions): SecretBroker =
 			cache.clear();
 			rotationListeners.clear();
 		},
+		drain: () => {
+			draining = true;
+		},
 		fingerprint: fingerprintOf,
 		invalidate,
+		metrics: () => ({ ...counters }),
 		onRotate,
 		redact,
 		redactStream,
