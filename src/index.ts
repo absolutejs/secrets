@@ -439,6 +439,304 @@ export const compositeAdapter = (adapters: SecretAdapter[]): SecretAdapter => {
 };
 
 // -----------------------------------------------------------------------------
+// encryptedFileAdapter — durable, AES-256-GCM, committable to private repo
+// -----------------------------------------------------------------------------
+
+const DEFAULT_PBKDF2_ITERATIONS = 600_000;
+const ENC_FILE_VERSION = 1;
+const SALT_BYTES = 16;
+const IV_BYTES = 12;
+const KEY_BYTES = 32;
+
+const bytesToBase64 = (bytes: Uint8Array): string => {
+	let bin = '';
+	for (const byte of bytes) bin += String.fromCharCode(byte);
+	return btoa(bin);
+};
+
+const base64ToBytes = (b64: string): Uint8Array => {
+	const bin = atob(b64);
+	const out = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+	return out;
+};
+
+type EncryptedEntry = {
+	/** Base64 12-byte IV. */
+	iv: string;
+	/** Base64 AES-GCM ciphertext (includes 16-byte tag at end). */
+	ct: string;
+};
+
+type EncryptedFile = {
+	version: 1;
+	/** Salt is omitted when the master key is supplied as raw bytes. */
+	kdf?: {
+		type: 'pbkdf2-sha256';
+		iterations: number;
+		salt: string;
+	};
+	values: Record<string, EncryptedEntry>;
+};
+
+/** Override for tests; defaults touch disk via `node:fs/promises`. */
+export type EncryptedFileIO = {
+	readFile: (path: string) => Promise<string | undefined>;
+	writeFileAtomic: (path: string, contents: string) => Promise<void>;
+};
+
+export type EncryptedFileAdapterMasterKey =
+	| { type: 'passphrase'; passphrase: string }
+	| { type: 'raw'; bytes: Uint8Array };
+
+export type EncryptedFileAdapterOptions = {
+	/** Absolute or relative path to the encrypted JSON file. */
+	path: string;
+	/**
+	 * Master key. Either a `passphrase` (KDF'd via PBKDF2-SHA256 with the
+	 * salt stored in the file) or `raw` 32 bytes (no KDF — pass the key
+	 * directly, useful when sourced from a vendor secret manager).
+	 */
+	key: EncryptedFileAdapterMasterKey;
+	/**
+	 * PBKDF2 iterations when `key.type === 'passphrase'`. Default 600_000
+	 * (OWASP 2025 recommendation for SHA-256). The chosen value is stored
+	 * in the file so future opens use it.
+	 */
+	pbkdf2Iterations?: number;
+	/** Override the rotation strategy (matches `inMemoryAdapter`). */
+	rotate?: (name: string, previous: string | null) => string;
+	/** Override file IO (tests). */
+	io?: EncryptedFileIO;
+};
+
+const defaultIo = (): EncryptedFileIO => ({
+	readFile: async (path) => {
+		try {
+			const text = await (await import('node:fs/promises')).readFile(
+				path,
+				'utf8'
+			);
+			return text;
+		} catch (error) {
+			if ((error as { code?: string }).code === 'ENOENT') return undefined;
+			throw error;
+		}
+	},
+	writeFileAtomic: async (path, contents) => {
+		const fs = await import('node:fs/promises');
+		const tempPath = `${path}.tmp.${process.pid}`;
+		await fs.writeFile(tempPath, contents, { mode: 0o600 });
+		await fs.rename(tempPath, path);
+	}
+});
+
+const deriveKeyFromPassphrase = async (
+	passphrase: string,
+	salt: Uint8Array,
+	iterations: number
+): Promise<CryptoKey> => {
+	const base = await crypto.subtle.importKey(
+		'raw',
+		new TextEncoder().encode(passphrase) as BufferSource,
+		'PBKDF2',
+		false,
+		['deriveKey']
+	);
+	return crypto.subtle.deriveKey(
+		{
+			hash: 'SHA-256',
+			iterations,
+			name: 'PBKDF2',
+			salt: salt as BufferSource
+		},
+		base,
+		{ length: 256, name: 'AES-GCM' },
+		false,
+		['encrypt', 'decrypt']
+	);
+};
+
+const importRawKey = async (bytes: Uint8Array): Promise<CryptoKey> => {
+	if (bytes.length !== KEY_BYTES) {
+		throw new Error(
+			`[secrets/encrypted-file] raw key must be ${KEY_BYTES} bytes (got ${bytes.length})`
+		);
+	}
+	return crypto.subtle.importKey(
+		'raw',
+		bytes as BufferSource,
+		{ name: 'AES-GCM' },
+		false,
+		['encrypt', 'decrypt']
+	);
+};
+
+/**
+ * Durable secret adapter that stores `name → value` in an encrypted
+ * JSON file (AES-256-GCM, per-value random IV). File is safe to commit
+ * to a private repo as long as the master key is kept separately
+ * (1Password, env var, hardware key, etc.).
+ *
+ * Two master-key shapes:
+ *
+ *   - `{ type: 'passphrase', passphrase }` — PBKDF2-SHA256 from the
+ *     passphrase, salt stored in the file. OWASP 2025 default (600k
+ *     iterations); add a stronger one via `pbkdf2Iterations`.
+ *   - `{ type: 'raw', bytes }` — 32 raw bytes. No KDF. Useful when the
+ *     key comes from a vendor secret manager that already gave you
+ *     random bytes.
+ *
+ * Caches decrypted values in memory after first read (consistent with
+ * the broker's caching layer above it).
+ */
+export const encryptedFileAdapter = (
+	options: EncryptedFileAdapterOptions
+): SecretAdapter => {
+	const io = options.io ?? defaultIo();
+	const iterations = options.pbkdf2Iterations ?? DEFAULT_PBKDF2_ITERATIONS;
+	const rotate = options.rotate ?? (() => randomBase36(32));
+
+	let cache: Map<string, string> | undefined;
+	let derivedKey: CryptoKey | undefined;
+	let salt: Uint8Array | undefined;
+
+	const ensureKey = async (): Promise<CryptoKey> => {
+		if (derivedKey !== undefined) return derivedKey;
+		if (options.key.type === 'raw') {
+			derivedKey = await importRawKey(options.key.bytes);
+			return derivedKey;
+		}
+		if (salt === undefined) {
+			salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+		}
+		derivedKey = await deriveKeyFromPassphrase(
+			options.key.passphrase,
+			salt,
+			iterations
+		);
+		return derivedKey;
+	};
+
+	const load = async (): Promise<Map<string, string>> => {
+		if (cache !== undefined) return cache;
+		const fileText = await io.readFile(options.path);
+		if (fileText === undefined) {
+			cache = new Map();
+			return cache;
+		}
+		let parsed: EncryptedFile;
+		try {
+			parsed = JSON.parse(fileText) as EncryptedFile;
+		} catch (error) {
+			throw new Error(
+				`[secrets/encrypted-file] could not parse ${options.path}: ${
+					(error as Error).message
+				}`
+			);
+		}
+		if (parsed.version !== ENC_FILE_VERSION) {
+			throw new Error(
+				`[secrets/encrypted-file] unsupported file version ${parsed.version} in ${options.path}`
+			);
+		}
+		if (parsed.kdf !== undefined) {
+			if (options.key.type !== 'passphrase') {
+				throw new Error(
+					`[secrets/encrypted-file] file was written with a passphrase but raw key was supplied`
+				);
+			}
+			salt = base64ToBytes(parsed.kdf.salt);
+		} else if (options.key.type === 'passphrase') {
+			throw new Error(
+				`[secrets/encrypted-file] file was written with a raw key but passphrase was supplied`
+			);
+		}
+		const key = await ensureKey();
+		const decoded = new Map<string, string>();
+		for (const [name, entry] of Object.entries(parsed.values)) {
+			try {
+				const iv = base64ToBytes(entry.iv) as BufferSource;
+				const ct = base64ToBytes(entry.ct) as BufferSource;
+				const pt = await crypto.subtle.decrypt(
+					{ iv, name: 'AES-GCM' },
+					key,
+					ct
+				);
+				decoded.set(name, new TextDecoder().decode(pt));
+			} catch {
+				throw new Error(
+					`[secrets/encrypted-file] failed to decrypt "${name}" in ${options.path} — wrong master key or corrupted file`
+				);
+			}
+		}
+		cache = decoded;
+		return cache;
+	};
+
+	const save = async (): Promise<void> => {
+		const data = cache ?? new Map<string, string>();
+		const key = await ensureKey();
+		const values: Record<string, EncryptedEntry> = {};
+		for (const [name, value] of data) {
+			const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+			const ct = await crypto.subtle.encrypt(
+				{ iv: iv as BufferSource, name: 'AES-GCM' },
+				key,
+				new TextEncoder().encode(value) as BufferSource
+			);
+			values[name] = {
+				ct: bytesToBase64(new Uint8Array(ct)),
+				iv: bytesToBase64(iv)
+			};
+		}
+		const file: EncryptedFile = {
+			values,
+			version: ENC_FILE_VERSION,
+			...(options.key.type === 'passphrase' && salt !== undefined
+				? {
+						kdf: {
+							iterations,
+							salt: bytesToBase64(salt),
+							type: 'pbkdf2-sha256'
+						}
+					}
+				: {})
+		};
+		await io.writeFileAtomic(options.path, JSON.stringify(file, null, 2));
+	};
+
+	return {
+		fetch: async (name) => {
+			const data = await load();
+			return data.get(name) ?? null;
+		},
+		list: async () => {
+			const data = await load();
+			return Array.from(data.keys());
+		},
+		put: async (name, value) => {
+			const data = await load();
+			data.set(name, value);
+			await save();
+		},
+		remove: async (name) => {
+			const data = await load();
+			data.delete(name);
+			await save();
+		},
+		rotate: async (name) => {
+			const data = await load();
+			const previous = data.get(name) ?? null;
+			const next = rotate(name, previous);
+			data.set(name, next);
+			await save();
+			return next;
+		}
+	};
+};
+
+// -----------------------------------------------------------------------------
 // Broker
 // -----------------------------------------------------------------------------
 

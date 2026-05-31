@@ -1,5 +1,70 @@
 # @absolutejs/secrets changelog
 
+## 0.4.0 — 2026-05-31
+
+Durable adapter — closes the "where do my secrets actually live"
+question. `envAdapter` is dev-only, `inMemoryAdapter` is for tests,
+neither survives a process restart. `encryptedFileAdapter` is the
+production-ready durable surface — committable to a private repo
+with the master key kept separately.
+
+### Added — `encryptedFileAdapter`
+
+- AES-256-GCM via Web Crypto. Zero runtime deps; works in Bun and
+  Node 20+ without extra packages.
+- Per-value random 12-byte IV. Same plaintext encrypted twice
+  produces different ciphertext.
+- Two master-key shapes:
+  - `{ type: 'passphrase', passphrase }` — PBKDF2-SHA256, default
+    600k iterations (OWASP 2025 recommendation for SHA-256). Salt
+    stored in the file.
+  - `{ type: 'raw', bytes }` — 32 raw bytes. No KDF. Useful when
+    the key comes from a vendor secret manager.
+- Atomic file writes via temp + `rename`. Concurrent reader sees
+  either old or new, never half-written.
+- Cross-mode mismatch caught loudly (passphrase ↔ raw).
+- AES-GCM's auth tag means wrong key surfaces as a clear "wrong
+  master key or corrupted file" error, not silent garbage.
+- Lazy init: KDF + file read on first `fetch`/`put`.
+- `io` override for tests so suites don't touch disk.
+- `rotate` override matching `inMemoryAdapter` for structured tokens.
+
+### File format
+
+```json
+{
+  "version": 1,
+  "kdf": { "type": "pbkdf2-sha256", "iterations": 600000, "salt": "<base64>" },
+  "values": { "STRIPE_KEY": { "iv": "<base64>", "ct": "<base64>" } }
+}
+```
+
+`kdf` omitted when master key is raw bytes. Safe to commit (it's all
+base64 ciphertext) as long as the master key stays out of the repo.
+
+### Composition with `@absolutejs/deploy/env`
+
+```ts
+const adapter = encryptedFileAdapter({
+  path: './.secrets.enc.json',
+  key: { type: 'passphrase', passphrase: process.env.SECRETS_MASTER! },
+});
+const broker = createSecretBroker({ adapter });
+
+await broker.rotate('STRIPE_KEY');                        // re-encrypts the file
+await syncSecretsToDeployments(broker, deployments);      // pushes to every target
+```
+
+### Tests
+
+17 new tests (`tests/encryptedFile.test.ts`) — passphrase + raw key
+round-trips, wrong-passphrase failure, per-value IV uniqueness, salt
+stability, cross-mode mismatch detection, SecretAdapter contract
+(list/remove/rotate), broker composition, real filesystem
+round-trip, atomic-write guarantee.
+
+Test count: 53 → 70.
+
 ## 0.3.0 — 2026-05-30
 
 ### Added — OpenTelemetry tracing via @absolutejs/telemetry
