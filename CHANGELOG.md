@@ -1,5 +1,53 @@
 # @absolutejs/secrets changelog
 
+## 0.5.0 — 2026-05-31
+
+Master-key rotation for the encrypted-file adapter. Closes the "I
+leaked my master passphrase, now what?" loop — re-encrypt every
+value under a new master key without ever decrypting to disk.
+
+### Added — `rotateMasterKey(options)`
+
+```ts
+await rotateMasterKey({
+  path: './.secrets.enc.json',
+  oldKey: { type: 'passphrase', passphrase: process.env.OLD_MASTER! },
+  newKey: { type: 'passphrase', passphrase: process.env.NEW_MASTER! },
+});
+```
+
+- Reads the file via `oldKey`, decrypts every value in-memory,
+  generates a fresh salt + per-value IVs, re-encrypts under
+  `newKey`, atomic-writes the new file.
+- Cross-mode transitions supported: passphrase ↔ raw key. Useful
+  for "graduate from operator-typed passphrase to vendor-managed
+  raw bytes" (or vice versa).
+- Atomic at the file layer (temp + rename). If decryption with
+  `oldKey` fails halfway through, the file remains intact — no
+  partial-write window.
+- Wrong `oldKey` surfaces as a clear "wrong key or corrupted file"
+  error, same shape as the adapter's read path.
+- Cross-mode mismatch on `oldKey` (e.g. file was passphrase-written
+  but you passed raw bytes) caught loudly.
+
+### Operational note
+
+After `rotateMasterKey` returns, any consumer still holding the old
+key fails to decrypt on next access. Coordinate the master-key
+swap on consumers (env var update, secrets-manager value bump,
+1Password entry update) at the same time you call this — same
+pattern as rotating any shared-secret credential.
+
+### Tests
+
+11 new tests (`tests/rotateMasterKey.test.ts`): passphrase → passphrase,
+all three cross-mode combinations, fresh-salt + fresh-IV
+verification, wrong-key failure, missing-file guard, mode-mismatch
+detection, file integrity on failure, value preservation across
+2000-char + Unicode + special-char round-trips.
+
+Test count: 70 → 81.
+
 ## 0.4.0 — 2026-05-31
 
 Durable adapter — closes the "where do my secrets actually live"

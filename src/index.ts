@@ -737,6 +737,155 @@ export const encryptedFileAdapter = (
 };
 
 // -----------------------------------------------------------------------------
+// rotateMasterKey — re-encrypt the file under a new master key
+// -----------------------------------------------------------------------------
+
+export type RotateMasterKeyOptions = {
+	/** Path to the encrypted JSON file (must exist). */
+	path: string;
+	/** Master key the file was written with. */
+	oldKey: EncryptedFileAdapterMasterKey;
+	/** Master key to re-encrypt under. */
+	newKey: EncryptedFileAdapterMasterKey;
+	/**
+	 * PBKDF2 iterations for the new passphrase (when `newKey.type ===
+	 * 'passphrase'`). Default 600_000. Stored in the rewritten file.
+	 */
+	newPbkdf2Iterations?: number;
+	/** Override file IO (tests). */
+	io?: EncryptedFileIO;
+};
+
+/**
+ * Re-encrypt the entire secrets file under a new master key. Reads
+ * every value with `oldKey`, writes them back encrypted under
+ * `newKey`. Atomic at the file layer (temp + rename); the old file
+ * remains intact if any step fails before the final write.
+ *
+ * Use cases:
+ *   - master passphrase leak: rotate to a new passphrase
+ *   - moving from passphrase to raw-bytes (or vice versa) — e.g.
+ *     graduating from "operator-typed passphrase" to "key sourced
+ *     from a vendor secret manager"
+ *   - periodic master-key rotation as a compliance hygiene measure
+ *
+ * After this returns, any process still holding the old key
+ * will fail to decrypt on next access. Rotate the consumers'
+ * master-key references at the same time you call this.
+ */
+export const rotateMasterKey = async (
+	options: RotateMasterKeyOptions
+): Promise<void> => {
+	const io = options.io ?? defaultIo();
+	const newIterations =
+		options.newPbkdf2Iterations ?? DEFAULT_PBKDF2_ITERATIONS;
+
+	const fileText = await io.readFile(options.path);
+	if (fileText === undefined) {
+		throw new Error(
+			`[secrets/encrypted-file] file ${options.path} does not exist`
+		);
+	}
+
+	let parsed: EncryptedFile;
+	try {
+		parsed = JSON.parse(fileText) as EncryptedFile;
+	} catch (error) {
+		throw new Error(
+			`[secrets/encrypted-file] could not parse ${options.path}: ${(error as Error).message}`
+		);
+	}
+	if (parsed.version !== ENC_FILE_VERSION) {
+		throw new Error(
+			`[secrets/encrypted-file] unsupported file version ${parsed.version} in ${options.path}`
+		);
+	}
+
+	let oldDerivedKey: CryptoKey;
+	if (options.oldKey.type === 'raw') {
+		if (parsed.kdf !== undefined) {
+			throw new Error(
+				`[secrets/encrypted-file] file was written with a passphrase but old key was supplied as raw`
+			);
+		}
+		oldDerivedKey = await importRawKey(options.oldKey.bytes);
+	} else {
+		if (parsed.kdf === undefined) {
+			throw new Error(
+				`[secrets/encrypted-file] file was written with a raw key but old key was supplied as passphrase`
+			);
+		}
+		const oldSalt = base64ToBytes(parsed.kdf.salt);
+		oldDerivedKey = await deriveKeyFromPassphrase(
+			options.oldKey.passphrase,
+			oldSalt,
+			parsed.kdf.iterations
+		);
+	}
+
+	const decrypted = new Map<string, string>();
+	for (const [name, entry] of Object.entries(parsed.values)) {
+		try {
+			const iv = base64ToBytes(entry.iv) as BufferSource;
+			const ct = base64ToBytes(entry.ct) as BufferSource;
+			const pt = await crypto.subtle.decrypt(
+				{ iv, name: 'AES-GCM' },
+				oldDerivedKey,
+				ct
+			);
+			decrypted.set(name, new TextDecoder().decode(pt));
+		} catch {
+			throw new Error(
+				`[secrets/encrypted-file] failed to decrypt "${name}" with old master key — wrong key or corrupted file`
+			);
+		}
+	}
+
+	let newDerivedKey: CryptoKey;
+	let newSalt: Uint8Array | undefined;
+	if (options.newKey.type === 'raw') {
+		newDerivedKey = await importRawKey(options.newKey.bytes);
+	} else {
+		newSalt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+		newDerivedKey = await deriveKeyFromPassphrase(
+			options.newKey.passphrase,
+			newSalt,
+			newIterations
+		);
+	}
+
+	const newValues: Record<string, EncryptedEntry> = {};
+	for (const [name, value] of decrypted) {
+		const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+		const ct = await crypto.subtle.encrypt(
+			{ iv: iv as BufferSource, name: 'AES-GCM' },
+			newDerivedKey,
+			new TextEncoder().encode(value) as BufferSource
+		);
+		newValues[name] = {
+			ct: bytesToBase64(new Uint8Array(ct)),
+			iv: bytesToBase64(iv)
+		};
+	}
+
+	const newFile: EncryptedFile = {
+		values: newValues,
+		version: ENC_FILE_VERSION,
+		...(options.newKey.type === 'passphrase' && newSalt !== undefined
+			? {
+					kdf: {
+						iterations: newIterations,
+						salt: bytesToBase64(newSalt),
+						type: 'pbkdf2-sha256'
+					}
+				}
+			: {})
+	};
+
+	await io.writeFileAtomic(options.path, JSON.stringify(newFile, null, 2));
+};
+
+// -----------------------------------------------------------------------------
 // Broker
 // -----------------------------------------------------------------------------
 
