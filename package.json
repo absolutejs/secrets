@@ -16,6 +16,9 @@
   "type": "module",
   "license": "BSL-1.1",
   "author": "Alex Kahn",
+  "absolutejs": {
+    "manifestContract": 1
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -30,7 +33,7 @@
     "rotation"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --outdir dist --sourcemap --target=bun && tsc --project tsconfig.build.json",
+    "build": "rm -rf dist && bun build src/index.ts src/manifest.ts --outdir dist --sourcemap --target=bun && tsc --project tsconfig.build.json && absolute-manifest emit",
     "test": "bun test tests/",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"./**/*.{ts,json,md}\"",
@@ -38,7 +41,9 @@
     "release": "bun run format && bun run check:package && bun publish"
   },
   "dependencies": {
-    "@absolutejs/telemetry": "^0.0.2"
+    "@absolutejs/manifest": "^0.1.0",
+    "@absolutejs/telemetry": "^0.0.2",
+    "@sinclair/typebox": "^0.34.0"
   },
   "peerDependencies": {
     "bun-types": "^1.3.14"
@@ -54,7 +59,13 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
-    }
+    },
+    "./manifest": {
+      "types": "./dist/manifest.d.ts",
+      "import": "./dist/manifest.js",
+      "default": "./dist/manifest.js"
+    },
+    "./manifest.json": "./dist/manifest.json"
   },
   "files": ["dist", "README.md"]
 }
