@@ -1,5 +1,17 @@
 # @absolutejs/secrets changelog
 
+## 0.5.2 — 2026-07-14
+
+Telemetry dependency alignment for full OpenTelemetry context propagation.
+
+- Bumps the runtime `@absolutejs/telemetry` dependency from `^0.0.2` to
+  `^0.1.1` and removes its redundant devDependency entry.
+- Removes duplicate incompatible `TracerProvider` types when a host uses the
+  current AbsoluteJS telemetry contract with the official OpenTelemetry SDK.
+- Enables `secrets.resolve` / `secrets.rotate` spans to join the active W3C
+  request trace supplied by a structurally compatible official provider.
+- No runtime API changes.
+
 ## 0.5.0 — 2026-05-31
 
 Master-key rotation for the encrypted-file adapter. Closes the "I
