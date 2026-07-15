@@ -17,6 +17,56 @@ SB-6 substrate are `@absolutejs/sync`'s `bridgeFetch.authorization()` hook
 declarations (per-customer host functions like Stripe charge, Slack ping,
 queue push).
 
+## Agent credential operations
+
+Agents should not call `resolve()` and should never receive a bearer token.
+`createCredentialOperationBroker()` instead gives them bounded capabilities:
+an exact agent and user, provider, operation scopes, URL origins, expiry, and
+maximum use count. The host resolves the secret only after the grant is
+atomically consumed, then passes it directly to an allowlisted provider
+operation. Results and audit events contain digests and identifiers, never the
+credential.
+
+```ts
+const grants = createMemoryCredentialGrantStore();
+await grants.put({
+  agentId: 'research-agent',
+  allowedOrigins: ['https://api.example.com'],
+  createdAt: Date.now(),
+  expiresAt: Date.now() + 60_000,
+  grantId: 'grant_123',
+  maximumUses: 1,
+  provider: 'example',
+  scopes: ['create-report'],
+  secretName: 'EXAMPLE_API_KEY',
+  used: 0,
+  userId: 'user_123',
+});
+
+const operations = createCredentialOperationBroker({
+  agency,
+  providers: [{
+    provider: 'example',
+    operations: {
+      'create-report': ({ credential, destination, input, signal }) =>
+        fetch(new URL('/reports', destination), {
+          body: JSON.stringify(input),
+          headers: { authorization: `Bearer ${credential}` },
+          method: 'POST',
+          signal,
+        }).then((response) => response.json()),
+    },
+  }],
+  secrets: broker,
+  store: grants,
+});
+```
+
+Use a durable `CredentialGrantStore` in production. Passing an `agency` adds
+policy, approval, single-use execution lease, and receipt enforcement.
+Requestable denials can be resumed after approval with
+`operations.resume(actionId)`.
+
 ```ts
 import { createSecretBroker, envAdapter, inMemoryAdapter, compositeAdapter } from '@absolutejs/secrets';
 

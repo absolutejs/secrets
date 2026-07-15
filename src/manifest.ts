@@ -60,7 +60,7 @@ const settings = Type.Object({
 });
 
 export const manifest = defineManifest<SecretBrokerOptions, SecretBroker>()({
-	contract: 1,
+	contract: 2,
 	identity: {
 		accent: '#0d9488',
 		category: 'infrastructure',
@@ -155,6 +155,10 @@ export const manifest = defineManifest<SecretBrokerOptions, SecretBroker>()({
 	tools: {
 		check_secret: tool.runtime({
 			annotations: { readOnlyHint: true },
+			authorization: {
+				effects: ['read'],
+				requiredScopes: ['secrets:inspect']
+			},
 			description:
 				'Check whether a named secret is configured. Reports presence and a log-safe sha256 fingerprint — never the value.',
 			handler: async ({ name }, broker) => {
@@ -168,6 +172,10 @@ export const manifest = defineManifest<SecretBrokerOptions, SecretBroker>()({
 		}),
 		redact_text: tool.runtime({
 			annotations: { readOnlyHint: true },
+			authorization: {
+				effects: ['read'],
+				requiredScopes: ['secrets:redact']
+			},
 			description:
 				'Preview redaction: returns the given text with every known (cached) secret replaced by [REDACTED:name]. Useful to check a log line or error message is safe to share. Only secrets the broker has already resolved are scrubbed.',
 			handler: ({ text }, broker) => broker.redact(text),
@@ -175,6 +183,10 @@ export const manifest = defineManifest<SecretBrokerOptions, SecretBroker>()({
 		}),
 		secret_stats: tool.runtime({
 			annotations: { readOnlyHint: true },
+			authorization: {
+				effects: ['read'],
+				requiredScopes: ['secrets:inspect']
+			},
 			description:
 				'Cumulative broker counters since the server started: resolves (hits/misses/errors), rotations, and how often redaction actually fired.',
 			handler: (_input, broker) => JSON.stringify(broker.metrics()),

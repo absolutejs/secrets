@@ -30,6 +30,21 @@ import {
 	type TracerProvider
 } from '@absolutejs/telemetry';
 
+export {
+	createCredentialOperationBroker,
+	createMemoryCredentialGrantStore,
+	type CredentialGrant,
+	type CredentialGrantStore,
+	type CredentialOperationBroker,
+	type CredentialOperationBrokerOptions,
+	type CredentialOperationContext,
+	type CredentialOperationEvent,
+	type CredentialOperationInput,
+	type CredentialOperationResult,
+	type CredentialProvider,
+	type PendingCredentialOperation
+} from './operations';
+
 export type SecretValue = {
 	/** The plaintext secret. Treat as poison: never log, never serialize. */
 	value: string;
