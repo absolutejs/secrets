@@ -599,7 +599,17 @@ export const encryptedFileAdapter = (
 
 	let cache: Map<string, string> | undefined;
 	let derivedKey: CryptoKey | undefined;
+	let mutationQueue = Promise.resolve();
 	let salt: Uint8Array | undefined;
+
+	const mutate = <Result>(operation: () => Promise<Result>) => {
+		const result = mutationQueue.then(operation, operation);
+		mutationQueue = result.then(
+			() => undefined,
+			() => undefined
+		);
+		return result;
+	};
 
 	const ensureKey = async (): Promise<CryptoKey> => {
 		if (derivedKey !== undefined) return derivedKey;
@@ -715,24 +725,24 @@ export const encryptedFileAdapter = (
 			const data = await load();
 			return Array.from(data.keys());
 		},
-		put: async (name, value) => {
+		put: (name, value) => mutate(async () => {
 			const data = await load();
 			data.set(name, value);
 			await save();
-		},
-		remove: async (name) => {
+		}),
+		remove: (name) => mutate(async () => {
 			const data = await load();
 			data.delete(name);
 			await save();
-		},
-		rotate: async (name) => {
+		}),
+		rotate: (name) => mutate(async () => {
 			const data = await load();
 			const previous = data.get(name) ?? null;
 			const next = rotate(name, previous);
 			data.set(name, next);
 			await save();
 			return next;
-		}
+		})
 	};
 };
 

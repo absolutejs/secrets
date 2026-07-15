@@ -1,5 +1,12 @@
 # @absolutejs/secrets changelog
 
+## 0.5.3 — 2026-07-15
+
+- Serializes encrypted-file adapter mutations so concurrent `put`, `remove`,
+  and `rotate` calls cannot race one atomic temp file or lose a credential.
+- Adds a real-filesystem concurrent-write regression test that reopens the
+  resulting store and verifies every value.
+
 ## 0.5.2 — 2026-07-14
 
 Telemetry dependency alignment for full OpenTelemetry context propagation.

@@ -369,4 +369,25 @@ describe('encryptedFileAdapter — real filesystem round-trip', () => {
 			false
 		);
 	});
+
+	test('serializes concurrent mutations without losing values or temp files', async () => {
+		const path = join(tmpDir, 'concurrent.enc.json');
+		const adapter = encryptedFileAdapter({
+			key: { bytes: RAW_KEY, type: 'raw' },
+			path
+		});
+		await Promise.all([
+			adapter.put?.('FIRST', 'first-value'),
+			adapter.put?.('SECOND', 'second-value'),
+			adapter.put?.('THIRD', 'third-value')
+		]);
+
+		const reopened = encryptedFileAdapter({
+			key: { bytes: RAW_KEY, type: 'raw' },
+			path
+		});
+		expect(await reopened.fetch('FIRST')).toBe('first-value');
+		expect(await reopened.fetch('SECOND')).toBe('second-value');
+		expect(await reopened.fetch('THIRD')).toBe('third-value');
+	});
 });
