@@ -44,6 +44,12 @@ export {
 	type CredentialProvider,
 	type PendingCredentialOperation
 } from './operations';
+export {
+	createPostgresCredentialGrantStore,
+	credentialGrantsPostgresSchemaSql,
+	type SecretsSqlClient,
+	type SecretsSqlResult
+} from './postgres';
 
 export type SecretValue = {
 	/** The plaintext secret. Treat as poison: never log, never serialize. */
