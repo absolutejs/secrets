@@ -7,10 +7,9 @@ import {
 import {
   createCredentialOperationBroker,
   createMemoryCredentialGrantStore,
-  createSecretBroker,
-  inMemoryAdapter,
   type CredentialGrant,
-} from "../src";
+} from "../src/agent";
+import { createSecretBroker, inMemoryAdapter } from "../src/broker";
 
 const actor = {
   agentId: "agent_1",

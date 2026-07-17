@@ -1,8 +1,18 @@
-import type { CredentialGrant, CredentialGrantStore, PendingCredentialOperation } from "./operations";
+import type {
+  CredentialGrant,
+  CredentialGrantStore,
+  PendingCredentialOperation,
+} from "./operations";
 
-export type SecretsSqlResult<Row> = { rowCount: number; rows: ReadonlyArray<Row> };
+export type SecretsSqlResult<Row> = {
+  rowCount: number;
+  rows: ReadonlyArray<Row>;
+};
 export type SecretsSqlClient = {
-  query: <Row = Record<string, unknown>>(sql: string, parameters?: ReadonlyArray<unknown>) => Promise<SecretsSqlResult<Row>>;
+  query: <Row = Record<string, unknown>>(
+    sql: string,
+    parameters?: ReadonlyArray<unknown>,
+  ) => Promise<SecretsSqlResult<Row>>;
 };
 
 const namespaceOf = (namespace: string) => {
@@ -28,7 +38,13 @@ CREATE TABLE IF NOT EXISTS ${ns}.pending_operations (
 
 type DataRow<Value> = { data: Value };
 
-export const createPostgresCredentialGrantStore = ({ client, namespace = "secrets" }: { client: SecretsSqlClient; namespace?: string }): CredentialGrantStore => {
+export const createPostgresCredentialGrantStore = ({
+  client,
+  namespace = "secrets",
+}: {
+  client: SecretsSqlClient;
+  namespace?: string;
+}): CredentialGrantStore => {
   const ns = namespaceOf(namespace);
   return {
     consume: async (grantId, now) => {
@@ -39,15 +55,38 @@ export const createPostgresCredentialGrantStore = ({ client, namespace = "secret
       return result.rows[0]?.data;
     },
     get: async (grantId) =>
-      (await client.query<DataRow<CredentialGrant>>(`SELECT data FROM ${ns}.credential_grants WHERE grant_id = $1`, [grantId])).rows[0]?.data,
+      (
+        await client.query<DataRow<CredentialGrant>>(
+          `SELECT data FROM ${ns}.credential_grants WHERE grant_id = $1`,
+          [grantId],
+        )
+      ).rows[0]?.data,
     getPending: async (actionId) =>
-      (await client.query<DataRow<PendingCredentialOperation>>(`SELECT data FROM ${ns}.pending_operations WHERE action_id = $1`, [actionId])).rows[0]?.data,
+      (
+        await client.query<DataRow<PendingCredentialOperation>>(
+          `SELECT data FROM ${ns}.pending_operations WHERE action_id = $1`,
+          [actionId],
+        )
+      ).rows[0]?.data,
     put: async (grant) => {
-      if (grant.maximumUses < 1 || grant.used < 0 || grant.used > grant.maximumUses)
+      if (
+        grant.maximumUses < 1 ||
+        grant.used < 0 ||
+        grant.used > grant.maximumUses
+      )
         throw new Error("Invalid credential grant usage");
       await client.query(
         `INSERT INTO ${ns}.credential_grants (grant_id, agent_id, user_id, provider, expires_at, maximum_uses, used, data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT (grant_id) DO UPDATE SET expires_at=EXCLUDED.expires_at, maximum_uses=EXCLUDED.maximum_uses, used=EXCLUDED.used, data=EXCLUDED.data`,
-        [grant.grantId, grant.agentId, grant.userId, grant.provider, grant.expiresAt, grant.maximumUses, grant.used, JSON.stringify(grant)],
+        [
+          grant.grantId,
+          grant.agentId,
+          grant.userId,
+          grant.provider,
+          grant.expiresAt,
+          grant.maximumUses,
+          grant.used,
+          JSON.stringify(grant),
+        ],
       );
     },
     putPending: async (pending) => {
@@ -57,6 +96,11 @@ export const createPostgresCredentialGrantStore = ({ client, namespace = "secret
       );
     },
     revoke: async (grantId) =>
-      (await client.query(`DELETE FROM ${ns}.credential_grants WHERE grant_id = $1`, [grantId])).rowCount === 1,
+      (
+        await client.query(
+          `DELETE FROM ${ns}.credential_grants WHERE grant_id = $1`,
+          [grantId],
+        )
+      ).rowCount === 1,
   };
 };

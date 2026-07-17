@@ -28,35 +28,42 @@ operation. Results and audit events contain digests and identifiers, never the
 credential.
 
 ```ts
+import {
+  createCredentialOperationBroker,
+  createMemoryCredentialGrantStore,
+} from "@absolutejs/secrets/agent";
+
 const grants = createMemoryCredentialGrantStore();
 await grants.put({
-  agentId: 'research-agent',
-  allowedOrigins: ['https://api.example.com'],
+  agentId: "research-agent",
+  allowedOrigins: ["https://api.example.com"],
   createdAt: Date.now(),
   expiresAt: Date.now() + 60_000,
-  grantId: 'grant_123',
+  grantId: "grant_123",
   maximumUses: 1,
-  provider: 'example',
-  scopes: ['create-report'],
-  secretName: 'EXAMPLE_API_KEY',
+  provider: "example",
+  scopes: ["create-report"],
+  secretName: "EXAMPLE_API_KEY",
   used: 0,
-  userId: 'user_123',
+  userId: "user_123",
 });
 
 const operations = createCredentialOperationBroker({
   agency,
-  providers: [{
-    provider: 'example',
-    operations: {
-      'create-report': ({ credential, destination, input, signal }) =>
-        fetch(new URL('/reports', destination), {
-          body: JSON.stringify(input),
-          headers: { authorization: `Bearer ${credential}` },
-          method: 'POST',
-          signal,
-        }).then((response) => response.json()),
+  providers: [
+    {
+      provider: "example",
+      operations: {
+        "create-report": ({ credential, destination, input, signal }) =>
+          fetch(new URL("/reports", destination), {
+            body: JSON.stringify(input),
+            headers: { authorization: `Bearer ${credential}` },
+            method: "POST",
+            signal,
+          }).then((response) => response.json()),
+      },
     },
-  }],
+  ],
   secrets: broker,
   store: grants,
 });
@@ -68,50 +75,55 @@ Requestable denials can be resumed after approval with
 `operations.resume(actionId)`.
 
 ```ts
-import { createSecretBroker, envAdapter, inMemoryAdapter, compositeAdapter } from '@absolutejs/secrets';
+import {
+  createSecretBroker,
+  envAdapter,
+  inMemoryAdapter,
+  compositeAdapter,
+} from "@absolutejs/secrets/broker";
 
 const broker = createSecretBroker({
   adapter: compositeAdapter([
-    inMemoryAdapter({ initial: { TEST_KEY: 'sk_test_local_value' } }),
-    envAdapter({ prefix: 'ABS_SECRET_' }),
+    inMemoryAdapter({ initial: { TEST_KEY: "sk_test_local_value" } }),
+    envAdapter({ prefix: "ABS_SECRET_" }),
   ]),
   audit: (event) => observabilitySink.write(event),
   cacheTtlMs: 60_000,
 });
 
 // In bridgeFetch.authorization():
-const { value, fingerprint } = (await broker.resolve('STRIPE_KEY'))!;
-logger.info('charging', { tenant, fingerprint });             // safe — no plaintext
-return { 'Authorization': `Bearer ${value}` };
+const { value, fingerprint } = (await broker.resolve("STRIPE_KEY"))!;
+logger.info("charging", { tenant, fingerprint }); // safe — no plaintext
+return { Authorization: `Bearer ${value}` };
 
 // In a log sink, before text leaves the host:
-const sanitized = broker.redact(line);                        // [REDACTED:STRIPE_KEY] replaces plaintext
+const sanitized = broker.redact(line); // [REDACTED:STRIPE_KEY] replaces plaintext
 sinkToCustomerVisibleLog(sanitized);
 
 // Rotate:
-const next = await broker.rotate('STRIPE_KEY');
-notifyDependents(next.fingerprint);                            // tell consumers a new key is in cache
+const next = await broker.rotate("STRIPE_KEY");
+notifyDependents(next.fingerprint); // tell consumers a new key is in cache
 ```
 
 ## v0.0.1 surface
 
-| API | Purpose |
-|---|---|
-| `createSecretBroker(options)` | Factory. Returns a `SecretBroker`. |
-| `broker.resolve(name)` | Returns `{ value, fingerprint } | null`. Uses cache within `cacheTtlMs`. |
-| `broker.fingerprint(value)` | Pure helper — sha256 prefix of any string. No adapter call. |
-| `broker.redact(text)` | Rewrite arbitrary text, replacing every cached value (longer-first) with `[REDACTED:NAME]`. Skips values shorter than `redactionMinLength`. |
-| `broker.rotate(name)` | Calls `adapter.rotate?`, caches the result, returns it. Throws if the adapter doesn't support rotation. |
-| `broker.invalidate(name?)` | Clear one entry or the whole cache. |
-| `broker.dispose()` | Tear down — clears cache; subsequent resolves return `null`. |
+| API                           | Purpose                                                                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `createSecretBroker(options)` | Factory. Returns a `SecretBroker`.                                                                                                          |
+| `broker.resolve(name)`        | Returns `{ value, fingerprint }                                                                                                             | null`. Uses cache within `cacheTtlMs`. |
+| `broker.fingerprint(value)`   | Pure helper — sha256 prefix of any string. No adapter call.                                                                                 |
+| `broker.redact(text)`         | Rewrite arbitrary text, replacing every cached value (longer-first) with `[REDACTED:NAME]`. Skips values shorter than `redactionMinLength`. |
+| `broker.rotate(name)`         | Calls `adapter.rotate?`, caches the result, returns it. Throws if the adapter doesn't support rotation.                                     |
+| `broker.invalidate(name?)`    | Clear one entry or the whole cache.                                                                                                         |
+| `broker.dispose()`            | Tear down — clears cache; subsequent resolves return `null`.                                                                                |
 
 ### Bundled adapters
 
-| Adapter | Use |
-|---|---|
-| `inMemoryAdapter({ initial?, rotate? })` | Tests, dev, and starter templates. Supports every operation. Default rotate = random base36. |
-| `envAdapter({ prefix?, env? })` | Reads `process.env` (or any injected `env` map). Prefix-scoped to avoid leaking unrelated env vars via `list`. Read-only. |
-| `compositeAdapter([...])` | Fan-out / fallback. `fetch` falls through; writes go to the first writeable adapter. |
+| Adapter                                  | Use                                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `inMemoryAdapter({ initial?, rotate? })` | Tests, dev, and starter templates. Supports every operation. Default rotate = random base36.                              |
+| `envAdapter({ prefix?, env? })`          | Reads `process.env` (or any injected `env` map). Prefix-scoped to avoid leaking unrelated env vars via `list`. Read-only. |
+| `compositeAdapter([...])`                | Fan-out / fallback. `fetch` falls through; writes go to the first writeable adapter.                                      |
 
 AWS Secrets Manager / HashiCorp Vault / Doppler / Infisical / GCP Secret
 Manager / Azure Key Vault adapters ship later as siblings — they're the

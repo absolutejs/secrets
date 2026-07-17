@@ -4,7 +4,7 @@ import {
   type AgentActor,
   digest,
 } from "@absolutejs/agency";
-import type { SecretBroker } from "./index";
+import type { SecretBroker } from "./broker";
 
 export type CredentialGrant = {
   agentId: string;

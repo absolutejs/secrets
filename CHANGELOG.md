@@ -1,5 +1,13 @@
 # @absolutejs/secrets changelog
 
+## 0.7.1 — 2026-07-16
+
+- Adds lean `./broker` and `./agent` entry points while preserving the root
+  export surface. Broker-only consumers no longer load the Agency credential
+  operation type graph during ordinary application typechecks.
+- Builds both entry points independently and keeps credential operations
+  coupled to the broker contract without a root-entry circular dependency.
+
 ## 0.5.3 — 2026-07-15
 
 - Serializes encrypted-file adapter mutations so concurrent `put`, `remove`,
@@ -29,9 +37,9 @@ value under a new master key without ever decrypting to disk.
 
 ```ts
 await rotateMasterKey({
-  path: './.secrets.enc.json',
-  oldKey: { type: 'passphrase', passphrase: process.env.OLD_MASTER! },
-  newKey: { type: 'passphrase', passphrase: process.env.NEW_MASTER! },
+  path: "./.secrets.enc.json",
+  oldKey: { type: "passphrase", passphrase: process.env.OLD_MASTER! },
+  newKey: { type: "passphrase", passphrase: process.env.NEW_MASTER! },
 });
 ```
 
@@ -113,13 +121,13 @@ base64 ciphertext) as long as the master key stays out of the repo.
 
 ```ts
 const adapter = encryptedFileAdapter({
-  path: './.secrets.enc.json',
-  key: { type: 'passphrase', passphrase: process.env.SECRETS_MASTER! },
+  path: "./.secrets.enc.json",
+  key: { type: "passphrase", passphrase: process.env.SECRETS_MASTER! },
 });
 const broker = createSecretBroker({ adapter });
 
-await broker.rotate('STRIPE_KEY');                        // re-encrypts the file
-await syncSecretsToDeployments(broker, deployments);      // pushes to every target
+await broker.rotate("STRIPE_KEY"); // re-encrypts the file
+await syncSecretsToDeployments(broker, deployments); // pushes to every target
 ```
 
 ### Tests
