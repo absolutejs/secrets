@@ -129,6 +129,17 @@ AWS Secrets Manager / HashiCorp Vault / Doppler / Infisical / GCP Secret
 Manager / Azure Key Vault adapters ship later as siblings — they're the
 ones with real auth surface, so they don't belong in v0.0.1.
 
+### Versioned overlap rotation
+
+`defineSecretOverlapRotation`, `secretOverlapCandidateVersions`,
+`verifySecretOverlapVersion`, and `secretOverlapDisposition` provide the pure
+host-side state machine for zero-downtime credential changes. The current
+version is always tried first, proof from the retained version cannot verify
+the replacement, a proven replacement retires the old version at the deadline,
+and an unproven replacement restores the known-good version. Storage adapters
+retain and remove the encrypted material; these helpers keep that policy
+consistent without handling plaintext.
+
 ### Audit
 
 Every `resolve`, `rotate`, and `invalidate` fires the `audit` hook with
