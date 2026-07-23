@@ -6,7 +6,7 @@
       "name": "@absolutejs/secrets",
       "dependencies": {
         "@absolutejs/agency": "^0.6.0",
-        "@absolutejs/manifest": "^0.2.0",
+        "@absolutejs/manifest": "^0.4.0",
         "@absolutejs/telemetry": "^0.1.1",
         "@sinclair/typebox": "^0.34.0",
       },
@@ -23,7 +23,7 @@
   "packages": {
     "@absolutejs/agency": ["@absolutejs/agency@0.6.0", "", { "dependencies": { "@absolutejs/manifest": "^0.3.0", "@sinclair/typebox": "^0.34.0" } }, "sha512-a92DbYQXZ5fg9Wl5Y73OIfjK/4GHNUtpctRvqTnqL1G62Mq+2cHDttkev8lK/D9c6Nhjr6+E0i4NWn9Vo69xXQ=="],
 
-    "@absolutejs/manifest": ["@absolutejs/manifest@0.2.0", "", { "peerDependencies": { "@sinclair/typebox": "^0.34.0" }, "bin": { "absolute-manifest": "dist/cli.js" } }, "sha512-m6xxlaFu4pb63KL/8e0nREu/TTCDbUElwvfeMXL4sA1t93B9HMrGpnoOvw+YyEUqFKxs90iDrf2UTjVxq1cfyw=="],
+    "@absolutejs/manifest": ["@absolutejs/manifest@0.4.0", "", { "peerDependencies": { "@sinclair/typebox": "^0.34.0" }, "bin": { "absolute-manifest": "dist/cli.js" } }, "sha512-hhgUMB2Q9+m2BxL7D9fITQfCtYJTwA1IC1jZIFFvz6ESUz4FV2OlvR8q95Dk3xn+TVrSihTitia9VIXD2hD5QA=="],
 
     "@absolutejs/telemetry": ["@absolutejs/telemetry@0.1.1", "", {}, "sha512-NcwsZytPOVQSnksYVofmvdDNqIwIJLbUmAMAZD5v2gLy98JgtvEmR1kHGNIXGAZgHA4rqofQt7PZlVCCwlx2mQ=="],
 

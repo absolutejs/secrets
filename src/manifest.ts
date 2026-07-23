@@ -151,6 +151,8 @@ export const manifest = defineManifest<SecretBrokerOptions, SecretBroker>()({
     check_secret: tool.runtime({
       annotations: { readOnlyHint: true },
       authorization: {
+        approval: "never",
+        audience: "admin",
         effects: ["read"],
         requiredScopes: ["secrets:inspect"],
       },
@@ -168,6 +170,8 @@ export const manifest = defineManifest<SecretBrokerOptions, SecretBroker>()({
     redact_text: tool.runtime({
       annotations: { readOnlyHint: true },
       authorization: {
+        approval: "never",
+        audience: "admin",
         effects: ["read"],
         requiredScopes: ["secrets:redact"],
       },
@@ -179,6 +183,8 @@ export const manifest = defineManifest<SecretBrokerOptions, SecretBroker>()({
     secret_stats: tool.runtime({
       annotations: { readOnlyHint: true },
       authorization: {
+        approval: "never",
+        audience: "admin",
         effects: ["read"],
         requiredScopes: ["secrets:inspect"],
       },
