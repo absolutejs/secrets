@@ -1,6 +1,6 @@
 {
   "name": "@absolutejs/secrets",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "Host-side secret broker for multi-tenant Bun runtimes. Pluggable adapters (env-var, in-memory, composite, encrypted-file); audit hook per resolve; safe fingerprints for logs; redact() walks known secrets out of arbitrary text before it lands in a log sink.",
   "repository": {
     "type": "git",
@@ -17,7 +17,14 @@
   "license": "BSL-1.1",
   "author": "Alex Kahn",
   "absolutejs": {
-    "manifestContract": 2
+    "manifestContract": 2,
+    "runtimePeers": {
+      "@absolutejs/agency": {
+        "range": ">=0.7.1 <0.8.0",
+        "tested": "0.7.1",
+        "buildExternals": ["@absolutejs/agency", "@absolutejs/agency/*"]
+      }
+    }
   },
   "publishConfig": {
     "access": "public"
@@ -41,7 +48,7 @@
     "release": "bun run format && bun run check:package && bun publish"
   },
   "dependencies": {
-    "@absolutejs/manifest": "^0.4.0",
+    "@absolutejs/manifest": "^0.6.0",
     "@absolutejs/telemetry": "^0.1.1",
     "@sinclair/typebox": "^0.34.0"
   },
