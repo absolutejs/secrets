@@ -27,6 +27,12 @@ atomically consumed, then passes it directly to an allowlisted provider
 operation. Results and audit events contain digests and identifiers, never the
 credential.
 
+Agency is a required host peer (`>=0.7.1 <0.8.0`) and is externalized from the
+Secrets build. The credential broker therefore uses the host's one approval
+ledger instead of embedding a second enforcement runtime. This package tests
+against exactly `0.7.1`; a new Agency minor requires an explicit compatibility
+release.
+
 ```ts
 import {
   createCredentialOperationBroker,
