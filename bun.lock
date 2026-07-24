@@ -5,7 +5,7 @@
     "": {
       "name": "@absolutejs/secrets",
       "dependencies": {
-        "@absolutejs/manifest": "^0.6.0",
+        "@absolutejs/manifest": "^0.6.3",
         "@absolutejs/telemetry": "^0.1.1",
         "@sinclair/typebox": "^0.34.0",
       },
@@ -24,7 +24,7 @@
   "packages": {
     "@absolutejs/agency": ["@absolutejs/agency@0.7.1", "", { "dependencies": { "@absolutejs/manifest": "^0.4.0", "@sinclair/typebox": "^0.34.0" }, "peerDependencies": { "drizzle-orm": ">=1.0.0-rc.4 <2" } }, "sha512-JO083TLtpWlTE0CgtThdAs4ITxWACiUDJI5ZOC0c7zZuJAXm4rKE69Vr42g2xBZV0aZypP26UWpxpESxQeDvvw=="],
 
-    "@absolutejs/manifest": ["@absolutejs/manifest@0.6.0", "", { "peerDependencies": { "@sinclair/typebox": ">=0.34.0 <0.35.0" }, "bin": { "absolute-manifest": "dist/cli.js" } }, "sha512-CFXxZmsSURQoe72aLsL+avKKJ/hskGyPMlEAsydcQd52RzzGthzrmxPWiTofb28d3ThrcUcDwmW4oNyyc0SdJw=="],
+    "@absolutejs/manifest": ["@absolutejs/manifest@0.6.3", "", { "peerDependencies": { "@sinclair/typebox": ">=0.34.0 <0.35.0" }, "bin": { "absolute-manifest": "dist/cli.js" } }, "sha512-wWihLuCEbnnbnHVnQhbVpZnILp3CnPF8/Ogk0yZ/p9nvKD3l3sMuohNLzT8zRJ9uFgjydEpoqhMApcHC225GYg=="],
 
     "@absolutejs/telemetry": ["@absolutejs/telemetry@0.1.1", "", {}, "sha512-NcwsZytPOVQSnksYVofmvdDNqIwIJLbUmAMAZD5v2gLy98JgtvEmR1kHGNIXGAZgHA4rqofQt7PZlVCCwlx2mQ=="],
 
