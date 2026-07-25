@@ -1,6 +1,6 @@
 {
   "name": "@absolutejs/secrets",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Host-side secret broker for multi-tenant Bun runtimes. Pluggable adapters (env-var, in-memory, composite, encrypted-file); audit hook per resolve; safe fingerprints for logs; redact() walks known secrets out of arbitrary text before it lands in a log sink.",
   "repository": {
     "type": "git",
@@ -49,19 +49,18 @@
     "release": "bun run format && bun run check:package && bun publish"
   },
   "dependencies": {
-    "@absolutejs/manifest": "^0.6.3",
-    "@absolutejs/telemetry": "^0.1.1",
+    "@absolutejs/manifest": "^0.7.2",
+    "@absolutejs/telemetry": "^0.2.0",
     "@sinclair/typebox": "^0.34.0"
   },
   "peerDependencies": {
-    "@absolutejs/agency": ">=0.7.1 <0.8.0",
-    "bun-types": "^1.3.14"
+    "@absolutejs/agency": ">=0.7.1 <0.8.0"
   },
   "devDependencies": {
     "@absolutejs/agency": "0.7.1",
-    "@types/bun": "^1.3.14",
-    "prettier": "^3.8.3",
-    "typescript": "^6.0.3"
+    "@types/bun": "1.3.14",
+    "prettier": "3.8.3",
+    "typescript": "6.0.3"
   },
   "exports": {
     ".": {
