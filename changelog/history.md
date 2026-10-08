@@ -1,5 +1,9 @@
 # @absolutejs/secrets changelog
 
+## 0.9.7 — 2026-08-07
+
+- Accepts the shared `@absolutejs/telemetry` 0.3 runtime line.
+
 ## 0.7.1 — 2026-07-16
 
 - Adds lean `./broker` and `./agent` entry points while preserving the root
